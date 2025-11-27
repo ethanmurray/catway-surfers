@@ -49,8 +49,8 @@ export class Game {
 
     // Chaser dog
     this.chaserDog = null;
-    this.chaserDistance = 15;
-    this.chaserBaseDistance = 15;
+    this.chaserDistance = 8;
+    this.chaserBaseDistance = 8;
 
     // Intro scene objects
     this.introDogBowl = null;
@@ -1022,8 +1022,6 @@ export class Game {
 
     this.chaserDog.position.x += (this.cat.position.x - this.chaserDog.position.x) * 2 * delta;
     this.chaserDog.position.y = Math.abs(Math.sin(time * 12)) * 0.15;
-
-    this.chaserDistance -= delta * 0.3;
     this.chaserDog.position.z = this.chaserDistance;
 
     this.checkCollisions();
