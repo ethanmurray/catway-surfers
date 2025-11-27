@@ -39,8 +39,9 @@ export class Game {
     // Obstacles
     this.obstacles = [];
     this.obstacleSpawnDistance = -80;
-    this.minObstacleGap = 15;
+    this.minObstacleGap = 30;
     this.lastObstacleZ = this.obstacleSpawnDistance;
+    this.lastBlockedLanes = []; // Track lanes blocked in previous spawn
 
     // Collectibles
     this.collectibles = [];
@@ -645,24 +646,33 @@ export class Game {
   }
 
   spawnObstacle() {
-    if (this.lastObstacleZ > this.obstacleSpawnDistance + this.minObstacleGap) return;
+    // Only spawn when we've traveled minObstacleGap distance since last spawn
+    if (this.lastObstacleZ < this.obstacleSpawnDistance + this.minObstacleGap) return;
 
-    const rand = Math.random();
-    let obstacle;
+    // Decide how many lanes to block (1 or 2, never all 3)
+    const numObstacles = Math.random() < 0.7 ? 1 : 2;
 
-    if (rand < 0.5) {
-      const lane = Math.floor(Math.random() * 3);
-      obstacle = this.createDogHouse(lane);
-    } else {
-      const lane = Math.floor(Math.random() * 3);
-      obstacle = this.createObstacleDog(lane);
+    // Pick random lanes
+    const availableLanes = [0, 1, 2];
+    const usedLanes = [];
+
+    for (let i = 0; i < numObstacles; i++) {
+      const laneIndex = Math.floor(Math.random() * availableLanes.length);
+      const lane = availableLanes.splice(laneIndex, 1)[0];
+      usedLanes.push(lane);
+
+      // Decide obstacle type (50% doghouse, 50% dog)
+      const obstacle = Math.random() < 0.5
+        ? this.createDogHouse(lane)
+        : this.createObstacleDog(lane);
+
+      this.obstacles.push(obstacle);
+      this.scene.add(obstacle);
     }
 
-    this.obstacles.push(obstacle);
-    this.scene.add(obstacle);
-
-    if (Math.random() < 0.7) {
-      const fishLane = Math.floor(Math.random() * 3);
+    // Spawn fish in a clear lane
+    if (Math.random() < 0.7 && availableLanes.length > 0) {
+      const fishLane = availableLanes[Math.floor(Math.random() * availableLanes.length)];
       const fish = this.createFish(fishLane, this.obstacleSpawnDistance - 5);
       this.collectibles.push(fish);
       this.scene.add(fish);
@@ -760,6 +770,7 @@ export class Game {
     this.jumpVelocity = 0;
     this.chaserDistance = this.chaserBaseDistance;
     this.lastObstacleZ = this.obstacleSpawnDistance;
+    this.lastBlockedLanes = [];
     this.isGameOver = false;
 
     this.cat.position.set(this.lanes[1], 0, 0);
