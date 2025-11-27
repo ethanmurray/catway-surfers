@@ -615,6 +615,89 @@ export class Game {
     return dog;
   }
 
+  createCatCatcherTruck(lane) {
+    const truck = new THREE.Group();
+    truck.userData.type = 'truck';
+    truck.userData.lane = lane;
+
+    const truckMaterial = new THREE.MeshStandardMaterial({ color: 0x2255aa });
+    const whiteMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff });
+    const blackMaterial = new THREE.MeshStandardMaterial({ color: 0x222222 });
+    const metalMaterial = new THREE.MeshStandardMaterial({ color: 0x555555, metalness: 0.6 });
+
+    // Ground clearance - raise everything to show slide-under space
+    const groundClearance = 1.0;
+
+    // Truck cab (front) - raised
+    const cabGeometry = new THREE.BoxGeometry(2.2, 1.8, 1.8);
+    const cab = new THREE.Mesh(cabGeometry, truckMaterial);
+    cab.position.set(0, groundClearance + 1.1, 1.5);
+    cab.castShadow = true;
+    truck.add(cab);
+
+    // Windshield
+    const windshieldGeometry = new THREE.PlaneGeometry(1.8, 0.9);
+    const windshieldMaterial = new THREE.MeshStandardMaterial({ color: 0x88ccff, metalness: 0.5 });
+    const windshield = new THREE.Mesh(windshieldGeometry, windshieldMaterial);
+    windshield.position.set(0, groundClearance + 1.5, 2.41);
+    truck.add(windshield);
+
+    // Truck cargo box (back) - tall so you can't jump over, raised
+    const cargoGeometry = new THREE.BoxGeometry(2.4, 3.2, 4);
+    const cargo = new THREE.Mesh(cargoGeometry, whiteMaterial);
+    cargo.position.set(0, groundClearance + 1.8, -0.8);
+    cargo.castShadow = true;
+    truck.add(cargo);
+
+    // "CAT CATCHER" sign on side (left)
+    const signGeometry = new THREE.BoxGeometry(0.05, 0.8, 3);
+    const signMaterial = new THREE.MeshStandardMaterial({ color: 0xff4444 });
+    const signLeft = new THREE.Mesh(signGeometry, signMaterial);
+    signLeft.position.set(-1.23, groundClearance + 1.8, -0.8);
+    truck.add(signLeft);
+
+    // "CAT CATCHER" sign on side (right)
+    const signRight = new THREE.Mesh(signGeometry, signMaterial);
+    signRight.position.set(1.23, groundClearance + 1.8, -0.8);
+    truck.add(signRight);
+
+    // Larger wheels to support raised body
+    const wheelGeometry = new THREE.CylinderGeometry(0.5, 0.5, 0.4, 16);
+    const wheelPositions = [
+      [-1.1, 0.5, 1.2],
+      [1.1, 0.5, 1.2],
+      [-1.1, 0.5, -1.5],
+      [1.1, 0.5, -1.5]
+    ];
+    wheelPositions.forEach(pos => {
+      const wheel = new THREE.Mesh(wheelGeometry, blackMaterial);
+      wheel.rotation.z = Math.PI / 2;
+      wheel.position.set(...pos);
+      truck.add(wheel);
+    });
+
+    // Visible undercarriage frame - shows the space to slide through
+    const frameGeometry = new THREE.BoxGeometry(1.8, 0.15, 5);
+    const frame = new THREE.Mesh(frameGeometry, metalMaterial);
+    frame.position.set(0, groundClearance, 0);
+    truck.add(frame);
+
+    // Axles connecting wheels
+    const axleGeometry = new THREE.CylinderGeometry(0.08, 0.08, 2.4, 8);
+    const frontAxle = new THREE.Mesh(axleGeometry, metalMaterial);
+    frontAxle.rotation.z = Math.PI / 2;
+    frontAxle.position.set(0, 0.5, 1.2);
+    truck.add(frontAxle);
+
+    const rearAxle = new THREE.Mesh(axleGeometry, metalMaterial);
+    rearAxle.rotation.z = Math.PI / 2;
+    rearAxle.position.set(0, 0.5, -1.5);
+    truck.add(rearAxle);
+
+    truck.position.set(this.lanes[lane], 0, this.obstacleSpawnDistance);
+    return truck;
+  }
+
   createFish(lane, zPos) {
     const fish = new THREE.Group();
     fish.userData.type = 'fish';
@@ -661,10 +744,16 @@ export class Game {
       const lane = availableLanes.splice(laneIndex, 1)[0];
       usedLanes.push(lane);
 
-      // Decide obstacle type (50% doghouse, 50% dog)
-      const obstacle = Math.random() < 0.5
-        ? this.createDogHouse(lane)
-        : this.createObstacleDog(lane);
+      // Decide obstacle type (15% truck, 42.5% doghouse, 42.5% dog)
+      const rand = Math.random();
+      let obstacle;
+      if (rand < 0.15) {
+        obstacle = this.createCatCatcherTruck(lane);
+      } else if (rand < 0.575) {
+        obstacle = this.createDogHouse(lane);
+      } else {
+        obstacle = this.createObstacleDog(lane);
+      }
 
       this.obstacles.push(obstacle);
       this.scene.add(obstacle);
@@ -693,11 +782,19 @@ export class Game {
 
         if (catBox.intersectsBox(obstacleBox)) {
           if (obstacle.userData.type === 'doghouse') {
+            // Doghouse: can jump over
             if (!this.isJumping || this.cat.position.y < 1.5) {
               this.gameOver();
               return;
             }
+          } else if (obstacle.userData.type === 'truck') {
+            // Truck: must slide under (can't jump over)
+            if (!this.isSliding) {
+              this.gameOver();
+              return;
+            }
           } else {
+            // Dogs: always hit
             this.gameOver();
             return;
           }
@@ -963,7 +1060,12 @@ export class Game {
 
     for (let i = this.obstacles.length - 1; i >= 0; i--) {
       const obstacle = this.obstacles[i];
-      obstacle.position.z += this.gameSpeed * delta;
+      // Trucks move faster towards the player
+      if (obstacle.userData.type === 'truck') {
+        obstacle.position.z += (this.gameSpeed + 20) * delta;
+      } else {
+        obstacle.position.z += this.gameSpeed * delta;
+      }
       if (obstacle.position.z > 20) {
         this.scene.remove(obstacle);
         this.obstacles.splice(i, 1);
