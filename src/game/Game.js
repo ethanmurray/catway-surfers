@@ -26,9 +26,15 @@ export class Game {
     // Player state
     this.isJumping = false;
     this.isSliding = false;
+    this.slideTimeout = null;
     this.jumpVelocity = 0;
     this.gravity = 30;
     this.jumpForce = 12;
+
+    // Ramp tracking
+    this.isOnRamp = false;
+    this.rampHeight = 0;
+    this.wasOnElevatedSurface = false; // Track if cat was on ramp/roof before jumping
 
     // Track
     this.trackSegments = [];
@@ -584,7 +590,10 @@ export class Game {
     dog.userData.type = 'dog';
     dog.userData.lane = lane;
 
-    const dogMaterial = new THREE.MeshStandardMaterial({ color: 0x666666 });
+    // Random dog colors: reddish brown, light brown, golden retriever yellow
+    const dogColors = [0x8B2500, 0xA0522D, 0xD4A574, 0xC4A45C, 0x8B4513];
+    const dogColor = dogColors[Math.floor(Math.random() * dogColors.length)];
+    const dogMaterial = new THREE.MeshStandardMaterial({ color: dogColor });
 
     const bodyGeometry = new THREE.CapsuleGeometry(0.4, 0.7, 8, 16);
     const body = new THREE.Mesh(bodyGeometry, dogMaterial);
@@ -619,6 +628,7 @@ export class Game {
     const truck = new THREE.Group();
     truck.userData.type = 'truck';
     truck.userData.lane = lane;
+    truck.userData.roofHeight = 4.4; // Top of cargo box
 
     const truckMaterial = new THREE.MeshStandardMaterial({ color: 0x2255aa });
     const whiteMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff });
@@ -698,6 +708,159 @@ export class Game {
     return truck;
   }
 
+  createTallTruck(lane) {
+    const truck = new THREE.Group();
+    truck.userData.type = 'tallTruck';
+    truck.userData.lane = lane;
+    truck.userData.roofHeight = 3.5; // 2 stories tall
+
+    const truckMaterial = new THREE.MeshStandardMaterial({ color: 0x995522 }); // Brown
+    const cargoMaterial = new THREE.MeshStandardMaterial({ color: 0xdddddd }); // Light gray cargo
+    const blackMaterial = new THREE.MeshStandardMaterial({ color: 0x222222 });
+    const roofMaterial = new THREE.MeshStandardMaterial({ color: 0x666666 });
+
+    // Truck cab (front)
+    const cabGeometry = new THREE.BoxGeometry(2.2, 1.8, 1.8);
+    const cab = new THREE.Mesh(cabGeometry, truckMaterial);
+    cab.position.set(0, 0.9, 1.5);
+    cab.castShadow = true;
+    truck.add(cab);
+
+    // Windshield
+    const windshieldGeometry = new THREE.PlaneGeometry(1.8, 0.9);
+    const windshieldMaterial = new THREE.MeshStandardMaterial({ color: 0x88ccff, metalness: 0.5 });
+    const windshield = new THREE.Mesh(windshieldGeometry, windshieldMaterial);
+    windshield.position.set(0, 1.3, 2.41);
+    truck.add(windshield);
+
+    // Main cargo box (2 stories tall, no ground clearance - can't slide under)
+    const cargoGeometry = new THREE.BoxGeometry(2.5, 3.5, 5);
+    const cargo = new THREE.Mesh(cargoGeometry, cargoMaterial);
+    cargo.position.set(0, 1.75, -1);
+    cargo.castShadow = true;
+    truck.add(cargo);
+
+    // Roof platform (walkable)
+    const roofGeometry = new THREE.BoxGeometry(2.6, 0.15, 5.2);
+    const roof = new THREE.Mesh(roofGeometry, roofMaterial);
+    roof.position.set(0, 3.55, -1);
+    roof.receiveShadow = true;
+    truck.add(roof);
+
+    // Wheels
+    const wheelGeometry = new THREE.CylinderGeometry(0.4, 0.4, 0.3, 16);
+    const wheelPositions = [
+      [-1.1, 0.4, 1.2],
+      [1.1, 0.4, 1.2],
+      [-1.1, 0.4, -2],
+      [1.1, 0.4, -2]
+    ];
+    wheelPositions.forEach(pos => {
+      const wheel = new THREE.Mesh(wheelGeometry, blackMaterial);
+      wheel.rotation.z = Math.PI / 2;
+      wheel.position.set(...pos);
+      truck.add(wheel);
+    });
+
+    // Side stripe decoration
+    const stripeGeometry = new THREE.BoxGeometry(0.05, 0.3, 4.5);
+    const stripeMaterial = new THREE.MeshStandardMaterial({ color: 0x3366aa });
+    const leftStripe = new THREE.Mesh(stripeGeometry, stripeMaterial);
+    leftStripe.position.set(-1.28, 2, -1);
+    truck.add(leftStripe);
+    const rightStripe = new THREE.Mesh(stripeGeometry, stripeMaterial);
+    rightStripe.position.set(1.28, 2, -1);
+    truck.add(rightStripe);
+
+    truck.position.set(this.lanes[lane], 0, this.obstacleSpawnDistance);
+    return truck;
+  }
+
+  createRampTruck(lane) {
+    const truck = new THREE.Group();
+    truck.userData.type = 'rampTruck';
+    truck.userData.lane = lane;
+    truck.userData.roofHeight = 3.5; // Height of the roof (2 stories)
+
+    // Fixed ramp length, random roof/platform length (4 to 20 units, like 1-5 doghouses)
+    const rampLength = 7;
+    const roofLength = 4 + Math.floor(Math.random() * 17); // 4 to 20 units
+    truck.userData.rampLength = rampLength;
+    truck.userData.roofLength = roofLength;
+
+    const wallMaterial = new THREE.MeshStandardMaterial({ color: 0x888888 });
+    const roofMaterial = new THREE.MeshStandardMaterial({ color: 0x555555 });
+    const rampMaterial = new THREE.MeshStandardMaterial({ color: 0xaaaa55 }); // Yellow-ish ramp
+
+    // Main structure (2 stories tall, solid block) - at end of ramp
+    const buildingDepth = roofLength;
+    const buildingGeometry = new THREE.BoxGeometry(2.5, 3.5, buildingDepth);
+    const building = new THREE.Mesh(buildingGeometry, wallMaterial);
+    building.position.set(0, 1.75, -buildingDepth / 2);
+    building.castShadow = true;
+    truck.add(building);
+
+    // Roof platform (where cat walks) - scales with building
+    const roofGeometry = new THREE.BoxGeometry(2.8, 0.2, roofLength + 0.5);
+    const roof = new THREE.Mesh(roofGeometry, roofMaterial);
+    roof.position.set(0, 3.6, -roofLength / 2);
+    roof.receiveShadow = true;
+    truck.add(roof);
+
+    // Ramp going from ground (front, towards player) up to roof (back)
+    const rampAngle = 0.47; // Fixed angle for fixed ramp length
+    const rampGeometry = new THREE.BoxGeometry(2.4, 0.2, rampLength);
+    const ramp = new THREE.Mesh(rampGeometry, rampMaterial);
+    ramp.position.set(0, 1.75, rampLength / 2 - 0.5); // Center of ramp
+    ramp.rotation.x = rampAngle;
+    ramp.castShadow = true;
+    truck.add(ramp);
+
+    // Ramp side rails
+    const rampRailGeometry = new THREE.BoxGeometry(0.1, 0.5, rampLength);
+    const leftRampRail = new THREE.Mesh(rampRailGeometry, wallMaterial);
+    leftRampRail.position.set(-1.15, 1.95, rampLength / 2 - 0.5);
+    leftRampRail.rotation.x = rampAngle;
+    truck.add(leftRampRail);
+    const rightRampRail = new THREE.Mesh(rampRailGeometry, wallMaterial);
+    rightRampRail.position.set(1.15, 1.95, rampLength / 2 - 0.5);
+    rightRampRail.rotation.x = rampAngle;
+    truck.add(rightRampRail);
+
+    // Back wall (so you know it's solid)
+    const backWallGeometry = new THREE.BoxGeometry(2.8, 0.5, 0.2);
+    const backWall = new THREE.Mesh(backWallGeometry, wallMaterial);
+    backWall.position.set(0, 3.75, -roofLength - 0.1);
+    truck.add(backWall);
+
+    truck.position.set(this.lanes[lane], 0, this.obstacleSpawnDistance);
+
+    // Spawn fish on the ramp/roof (50% chance per ramp)
+    if (Math.random() < 0.5) {
+      const numFish = 1 + Math.floor(Math.random() * 3); // 1-3 fish
+      for (let i = 0; i < numFish; i++) {
+        // Random position along ramp or roof
+        const onRoof = Math.random() < 0.4;
+        let fishZ, fishY;
+        if (onRoof) {
+          fishZ = -Math.random() * roofLength;
+          fishY = 3.5 + 1; // On roof + floating height
+        } else {
+          // On ramp - calculate height based on position
+          const rampProgress = Math.random();
+          fishZ = rampLength * (1 - rampProgress) - 0.5;
+          fishY = rampProgress * 3.5 + 1; // Ramp height + floating
+        }
+        const fish = this.createFish(lane, this.obstacleSpawnDistance + fishZ);
+        fish.position.y = fishY;
+        this.collectibles.push(fish);
+        this.scene.add(fish);
+      }
+    }
+
+    return truck;
+  }
+
   createFish(lane, zPos) {
     const fish = new THREE.Group();
     fish.userData.type = 'fish';
@@ -728,6 +891,24 @@ export class Game {
     return fish;
   }
 
+  spawnTallTruckWithFish(lane, zPos) {
+    const tallTruck = this.createTallTruck(lane);
+    tallTruck.position.z = zPos;
+    this.obstacles.push(tallTruck);
+    this.scene.add(tallTruck);
+
+    // 50% chance to spawn fish on top
+    if (Math.random() < 0.5) {
+      const numFish = 1 + Math.floor(Math.random() * 2); // 1-2 fish
+      for (let f = 0; f < numFish; f++) {
+        const fish = this.createFish(lane, zPos - 2 + Math.random() * 4);
+        fish.position.y = 3.5 + 1; // Roof height + floating
+        this.collectibles.push(fish);
+        this.scene.add(fish);
+      }
+    }
+  }
+
   spawnObstacle() {
     // Only spawn when we've traveled minObstacleGap distance since last spawn
     if (this.lastObstacleZ < this.obstacleSpawnDistance + this.minObstacleGap) return;
@@ -739,17 +920,57 @@ export class Game {
     const availableLanes = [0, 1, 2];
     const usedLanes = [];
 
+    // Track if we spawn a ramp - if so, no other obstacles in this frame
+    let spawnedRamp = false;
+
     for (let i = 0; i < numObstacles; i++) {
+      // If a ramp was spawned, don't spawn any more obstacles at this Z position
+      if (spawnedRamp) break;
+
       const laneIndex = Math.floor(Math.random() * availableLanes.length);
       const lane = availableLanes.splice(laneIndex, 1)[0];
       usedLanes.push(lane);
 
-      // Decide obstacle type (15% truck, 42.5% doghouse, 42.5% dog)
+      // Decide obstacle type (12% cat catcher, 15% ramp, 36% doghouse, 37% dog)
+      // Tall trucks spawn WITH ramp trucks, not separately
       const rand = Math.random();
       let obstacle;
-      if (rand < 0.15) {
+      if (rand < 0.12) {
         obstacle = this.createCatCatcherTruck(lane);
-      } else if (rand < 0.575) {
+      } else if (rand < 0.27) {
+        obstacle = this.createRampTruck(lane);
+        spawnedRamp = true; // Mark that we spawned a ramp - no other obstacles in same frame
+        // 70% chance to spawn tall trucks near the ramp
+        if (Math.random() < 0.7) {
+          const roofLen = obstacle.userData.roofLength || 4;
+          const jumpDistance = 8 + Math.random() * 4; // 8-12 units jump distance
+
+          // Decide pattern: single, side-by-side, or line
+          const pattern = Math.random();
+
+          if (pattern < 0.4) {
+            // Single tall truck in random lane
+            const truckLane = Math.floor(Math.random() * 3);
+            this.spawnTallTruckWithFish(truckLane, this.obstacleSpawnDistance - roofLen - jumpDistance);
+          } else if (pattern < 0.7) {
+            // Two trucks side by side (2 random lanes)
+            const lanes = [0, 1, 2];
+            const lane1 = lanes.splice(Math.floor(Math.random() * 3), 1)[0];
+            const lane2 = lanes[Math.floor(Math.random() * 2)];
+            const zPos = this.obstacleSpawnDistance - roofLen - jumpDistance;
+            this.spawnTallTruckWithFish(lane1, zPos);
+            this.spawnTallTruckWithFish(lane2, zPos);
+          } else {
+            // Line of trucks (2-3 in same lane)
+            const truckLane = Math.floor(Math.random() * 3);
+            const numTrucks = 2 + Math.floor(Math.random() * 2); // 2-3 trucks
+            for (let t = 0; t < numTrucks; t++) {
+              const zPos = this.obstacleSpawnDistance - roofLen - jumpDistance - (t * 6);
+              this.spawnTallTruckWithFish(truckLane, zPos);
+            }
+          }
+        }
+      } else if (rand < 0.63) {
         obstacle = this.createDogHouse(lane);
       } else {
         obstacle = this.createObstacleDog(lane);
@@ -776,7 +997,86 @@ export class Game {
     const catBox = new THREE.Box3().setFromObject(this.cat);
     catBox.expandByScalar(-0.2);
 
+    // Roof detection - check ramp trucks and cat catcher trucks for landing
+    this.isOnRamp = false;
+    this.rampHeight = 0;
+
     for (const obstacle of this.obstacles) {
+      const truckZ = obstacle.position.z;
+      const truckLane = obstacle.userData.lane;
+
+      // Check if truck is in range (cat at z=0) - wider range for long ramps
+      if (truckZ > -15 && truckZ < 30 && this.targetLane === truckLane) {
+
+        if (obstacle.userData.type === 'rampTruck') {
+          // Ramp truck - calculate height based on position
+          const roofHeight = obstacle.userData.roofHeight || 3.5;
+          const rampLen = obstacle.userData.rampLength || 7;
+          const roofLen = obstacle.userData.roofLength || 4;
+
+          // Ramp goes from ground (truckZ + rampLen) to roof level (truckZ)
+          // Roof goes from truckZ to (truckZ - roofLen)
+          const rampStart = truckZ + rampLen; // Front of ramp (ground level)
+          const rampEnd = truckZ;              // Top of ramp (roof level)
+          const roofEnd = truckZ - roofLen;    // Back of roof
+          const catZ = 0; // Cat is always at z=0
+
+          if (catZ <= rampStart && catZ >= roofEnd) {
+            // Can't slide under a ramp - cancel slide and walk up
+            if (this.isSliding) {
+              this.cancelSlide();
+            }
+
+            this.isOnRamp = true;
+            this.wasOnElevatedSurface = true; // Remember we were on a ramp
+
+            if (catZ > rampEnd) {
+              // Cat is on the ramp - calculate height based on progress
+              // rampStart = ground (height 0), rampEnd = roof (height roofHeight)
+              const rampProgress = (rampStart - catZ) / (rampStart - rampEnd);
+              const calculatedHeight = rampProgress * roofHeight;
+              this.rampHeight = Math.max(this.rampHeight, calculatedHeight);
+            } else {
+              // Cat is on the roof
+              this.rampHeight = Math.max(this.rampHeight, roofHeight);
+            }
+          }
+        }
+        else if (obstacle.userData.type === 'truck') {
+          // Cat Catcher truck - can ONLY land on roof if previously on elevated surface
+          const roofHeight = obstacle.userData.roofHeight || 4.4;
+          if (this.isOnRamp || this.wasOnElevatedSurface) {
+            this.isOnRamp = true; // Mark as on elevated surface
+            this.wasOnElevatedSurface = true; // Keep tracking
+            this.rampHeight = Math.max(this.rampHeight, roofHeight);
+          }
+        }
+        else if (obstacle.userData.type === 'tallTruck') {
+          // Tall truck - can ONLY land on roof if previously on elevated surface
+          const roofHeight = obstacle.userData.roofHeight || 3.5;
+          if (this.isOnRamp || this.wasOnElevatedSurface) {
+            this.isOnRamp = true; // Mark as on elevated surface
+            this.wasOnElevatedSurface = true; // Keep tracking
+            this.rampHeight = Math.max(this.rampHeight, roofHeight);
+          }
+        }
+      }
+    }
+
+    // If on ramp/roof and not jumping, stop any falling
+    if (this.isOnRamp && !this.isJumping) {
+      this.jumpVelocity = 0;
+    }
+
+    // Reset wasOnElevatedSurface when cat lands on the ground
+    if (!this.isOnRamp && !this.isJumping && this.cat.position.y < 0.5) {
+      this.wasOnElevatedSurface = false;
+    }
+
+    // Now handle other obstacle collisions with bounding box
+    for (const obstacle of this.obstacles) {
+      if (obstacle.userData.type === 'rampTruck') continue; // Already handled above
+
       if (obstacle.position.z > -2 && obstacle.position.z < 2) {
         const obstacleBox = new THREE.Box3().setFromObject(obstacle);
 
@@ -788,8 +1088,18 @@ export class Game {
               return;
             }
           } else if (obstacle.userData.type === 'truck') {
-            // Truck: must slide under (can't jump over)
-            if (!this.isSliding) {
+            // Cat Catcher Truck: must slide under OR be on the roof
+            const truckRoofHeight = obstacle.userData.roofHeight || 4.4;
+            const isOnTruckRoof = this.cat.position.y >= truckRoofHeight - 0.5;
+            if (!this.isSliding && !isOnTruckRoof) {
+              this.gameOver();
+              return;
+            }
+          } else if (obstacle.userData.type === 'tallTruck') {
+            // Tall Truck: can't slide under, must be on the roof
+            const truckRoofHeight = obstacle.userData.roofHeight || 3.5;
+            const isOnTruckRoof = this.cat.position.y >= truckRoofHeight - 0.5;
+            if (!isOnTruckRoof) {
               this.gameOver();
               return;
             }
@@ -865,6 +1175,9 @@ export class Game {
     this.isJumping = false;
     this.isSliding = false;
     this.jumpVelocity = 0;
+    this.isOnRamp = false;
+    this.rampHeight = 0;
+    this.wasOnElevatedSurface = false;
     this.chaserDistance = this.chaserBaseDistance;
     this.lastObstacleZ = this.obstacleSpawnDistance;
     this.lastBlockedLanes = [];
@@ -874,6 +1187,8 @@ export class Game {
     this.cat.scale.y = 1;
 
     this.chaserDog.position.set(0, 0, this.chaserDistance);
+    this.chaserDog.visible = true;
+    this.dogChaseTime = 0;
 
     const gameOverScreen = document.getElementById('game-over-screen');
     if (gameOverScreen) gameOverScreen.style.display = 'none';
@@ -1001,21 +1316,56 @@ export class Game {
   }
 
   jump() {
-    if (!this.isJumping && !this.isSliding) {
+    // If sliding, cancel slide and jump instead
+    if (this.isSliding) {
+      this.cancelSlide();
+      this.isJumping = true;
+      this.jumpVelocity = this.jumpForce;
+      return;
+    }
+    // Normal jump
+    if (!this.isJumping) {
       this.isJumping = true;
       this.jumpVelocity = this.jumpForce;
     }
   }
 
   slide() {
-    if (!this.isJumping && !this.isSliding) {
-      this.isSliding = true;
-      this.cat.scale.y = 0.5;
-      setTimeout(() => {
-        this.isSliding = false;
-        this.cat.scale.y = 1;
-      }, 500);
+    // If jumping, cancel jump and slide instead
+    if (this.isJumping) {
+      this.isJumping = false;
+      this.jumpVelocity = 0;
+      this.cat.position.y = this.rampHeight; // Use ramp height if on ramp, otherwise 0
+      this.startSlide();
+      return;
     }
+    // Normal slide
+    if (!this.isSliding) {
+      this.startSlide();
+    }
+  }
+
+  startSlide() {
+    this.isSliding = true;
+    this.cat.scale.y = 0.5;
+    // Clear any existing slide timeout
+    if (this.slideTimeout) {
+      clearTimeout(this.slideTimeout);
+    }
+    this.slideTimeout = setTimeout(() => {
+      this.isSliding = false;
+      this.cat.scale.y = 1;
+      this.slideTimeout = null;
+    }, 500);
+  }
+
+  cancelSlide() {
+    if (this.slideTimeout) {
+      clearTimeout(this.slideTimeout);
+      this.slideTimeout = null;
+    }
+    this.isSliding = false;
+    this.cat.scale.y = 1;
   }
 
   startGame() {
@@ -1060,9 +1410,12 @@ export class Game {
 
     for (let i = this.obstacles.length - 1; i >= 0; i--) {
       const obstacle = this.obstacles[i];
-      // Trucks move faster towards the player
+      // Cat Catcher trucks move faster towards the player, tall trucks stay still
       if (obstacle.userData.type === 'truck') {
         obstacle.position.z += (this.gameSpeed + 20) * delta;
+      } else if (obstacle.userData.type === 'tallTruck') {
+        // Tall truck stays stationary - only moves with normal game speed
+        obstacle.position.z += this.gameSpeed * delta;
       } else {
         obstacle.position.z += this.gameSpeed * delta;
       }
@@ -1085,14 +1438,19 @@ export class Game {
     this.lastObstacleZ += this.gameSpeed * delta;
     this.spawnObstacle();
 
+    // Check collisions BEFORE updating cat position/animation
+    this.checkCollisions();
+
     const targetX = this.lanes[this.targetLane];
     this.cat.position.x += (targetX - this.cat.position.x) * 10 * delta;
 
     if (this.isJumping) {
       this.cat.position.y += this.jumpVelocity * delta;
       this.jumpVelocity -= this.gravity * delta;
-      if (this.cat.position.y <= 0) {
-        this.cat.position.y = 0;
+      // Land on ramp/roof if on one, otherwise ground
+      const landingHeight = this.rampHeight;
+      if (this.cat.position.y <= landingHeight) {
+        this.cat.position.y = landingHeight;
         this.isJumping = false;
         this.jumpVelocity = 0;
       }
@@ -1108,8 +1466,20 @@ export class Game {
     if (this.catTail) {
       this.catTail.rotation.z = Math.sin(time * 8) * 0.3;
     }
-    if (!this.isJumping && !this.isSliding) {
-      this.cat.position.y = Math.abs(Math.sin(time * 15)) * 0.1;
+    if (!this.isJumping) {
+      // Check if cat walked off edge of a roof (cat is elevated but no longer on ramp)
+      if (this.cat.position.y > this.rampHeight + 0.5) {
+        // Start falling - use jumping physics with 0 initial velocity
+        if (this.isSliding) {
+          this.cancelSlide(); // Cancel slide when falling
+        }
+        this.isJumping = true;
+        this.jumpVelocity = 0;
+      } else if (!this.isSliding) {
+        // Add bobbing animation on top of ramp height (if on ramp)
+        const bobbing = Math.abs(Math.sin(time * 15)) * 0.1;
+        this.cat.position.y = this.rampHeight + bobbing;
+      }
     }
 
     if (this.dogLegs) {
@@ -1122,11 +1492,26 @@ export class Game {
       this.dogTail.rotation.z = Math.sin(time * 10) * 0.4;
     }
 
-    this.chaserDog.position.x += (this.cat.position.x - this.chaserDog.position.x) * 2 * delta;
-    this.chaserDog.position.y = Math.abs(Math.sin(time * 12)) * 0.15;
-    this.chaserDog.position.z = this.chaserDistance;
+    // Dog chases for 5 seconds, then gradually falls behind and disappears
+    if (this.chaserDog.visible) {
+      this.chaserDog.position.x += (this.cat.position.x - this.chaserDog.position.x) * 2 * delta;
+      this.chaserDog.position.y = Math.abs(Math.sin(time * 12)) * 0.15;
 
-    this.checkCollisions();
+      // Track how long the dog has been chasing
+      this.dogChaseTime = (this.dogChaseTime || 0) + delta;
+
+      // After 5 seconds, dog starts falling behind at 3 units per second
+      if (this.dogChaseTime > 5) {
+        this.chaserDistance += delta * 3;
+      }
+
+      this.chaserDog.position.z = this.chaserDistance;
+
+      // Hide dog when it's far enough behind (out of view)
+      if (this.chaserDistance > 30) {
+        this.chaserDog.visible = false;
+      }
+    }
   }
 
   update(delta) {
